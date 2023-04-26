@@ -1,14 +1,13 @@
-
 import KDBush from 'kdbush';
 
 const defaultOptions = {
-    minZoom: 0,   // min zoom to generate clusters on
-    maxZoom: 16,  // max zoom level to cluster the points on
+    minZoom: 0, // min zoom to generate clusters on
+    maxZoom: 16, // max zoom level to cluster the points on
     minPoints: 2, // minimum points to form a cluster
-    radius: 40,   // cluster radius in pixels
-    extent: 512,  // tile extent (radius is calculated relative to it)
+    radius: 40, // cluster radius in pixels
+    extent: 512, // tile extent (radius is calculated relative to it)
     nodeSize: 64, // size of the KD-tree leaf node, affects performance
-    log: false,   // whether to log timing info
+    log: false, // whether to log timing info
 
     // whether to generate numeric ids for input features (in vector tiles)
     generateId: false,
@@ -17,14 +16,32 @@ const defaultOptions = {
     reduce: null, // (accumulated, props) => { accumulated.sum += props.sum; }
 
     // properties to use for individual points when running the reducer
-    map: props => props // props => ({sum: props.my_value})
-};
+    map: (props) => props, // props => ({sum: props.my_value})
 
-const fround = Math.fround || (tmp => ((x) => { tmp[0] = +x; return tmp[0]; }))(new Float32Array(1));
+    //crs 用来标识坐标系信息
+    crs: 'EPSG:4490',
+};
+const crsMap = {
+    'EPSG:4326': {
+        extent: [-180, -270, 180, 90],
+        width: 360,
+        height: 360,
+        originX: -180,
+        originY: 90,
+    },
+};
+let crs = '';
+
+const fround =
+    Math.fround ||
+    ((tmp) => (x) => {
+        tmp[0] = +x;
+        return tmp[0];
+    })(new Float32Array(1));
 
 function createIndex(points, nodeSize) {
     const tree = new KDBush(points.length, nodeSize, Float32Array);
-    for (const {x, y} of points) tree.add(x, y);
+    for (const { x, y } of points) tree.add(x, y);
     tree.finish();
     tree.points = points;
     return tree;
@@ -33,15 +50,16 @@ function createIndex(points, nodeSize) {
 export default class Supercluster {
     constructor(options) {
         this.options = Object.assign(Object.create(defaultOptions), options);
+        crs = options.crs;
         this.trees = new Array(this.options.maxZoom + 1);
     }
 
     load(points) {
-        const {log, minZoom, maxZoom, nodeSize} = this.options;
+        const { log, minZoom, maxZoom, nodeSize } = this.options;
 
         if (log) console.time('total time');
 
-        const timerId = `prepare ${  points.length  } points`;
+        const timerId = `prepare ${points.length} points`;
         if (log) console.time(timerId);
 
         this.points = points;
@@ -74,9 +92,9 @@ export default class Supercluster {
     }
 
     getClusters(bbox, zoom) {
-        let minLng = ((bbox[0] + 180) % 360 + 360) % 360 - 180;
+        let minLng = ((((bbox[0] + 180) % 360) + 360) % 360) - 180;
         const minLat = Math.max(-90, Math.min(90, bbox[1]));
-        let maxLng = bbox[2] === 180 ? 180 : ((bbox[2] + 180) % 360 + 360) % 360 - 180;
+        let maxLng = bbox[2] === 180 ? 180 : ((((bbox[2] + 180) % 360) + 360) % 360) - 180;
         const maxLat = Math.max(-90, Math.min(90, bbox[3]));
 
         if (bbox[2] - bbox[0] >= 360) {
@@ -137,28 +155,22 @@ export default class Supercluster {
     getTile(z, x, y) {
         const tree = this.trees[this._limitZoom(z)];
         const z2 = Math.pow(2, z);
-        const {extent, radius} = this.options;
+        const { extent, radius } = this.options;
         const p = radius / extent;
         const top = (y - p) / z2;
         const bottom = (y + 1 + p) / z2;
 
         const tile = {
-            features: []
+            features: [],
         };
 
-        this._addTileFeatures(
-            tree.range((x - p) / z2, top, (x + 1 + p) / z2, bottom),
-            tree.points, x, y, z2, tile);
+        this._addTileFeatures(tree.range((x - p) / z2, top, (x + 1 + p) / z2, bottom), tree.points, x, y, z2, tile);
 
         if (x === 0) {
-            this._addTileFeatures(
-                tree.range(1 - p / z2, top, 1, bottom),
-                tree.points, z2, y, z2, tile);
+            this._addTileFeatures(tree.range(1 - p / z2, top, 1, bottom), tree.points, z2, y, z2, tile);
         }
         if (x === z2 - 1) {
-            this._addTileFeatures(
-                tree.range(0, top, p / z2, bottom),
-                tree.points, -1, y, z2, tile);
+            this._addTileFeatures(tree.range(0, top, p / z2, bottom), tree.points, -1, y, z2, tile);
         }
 
         return tile.features.length ? tile : null;
@@ -222,11 +234,10 @@ export default class Supercluster {
 
             const f = {
                 type: 1,
-                geometry: [[
-                    Math.round(this.options.extent * (px * z2 - x)),
-                    Math.round(this.options.extent * (py * z2 - y))
-                ]],
-                tags
+                geometry: [
+                    [Math.round(this.options.extent * (px * z2 - x)), Math.round(this.options.extent * (py * z2 - y))],
+                ],
+                tags,
             };
 
             // assign id
@@ -253,7 +264,7 @@ export default class Supercluster {
 
     _cluster(points, zoom) {
         const clusters = [];
-        const {radius, extent, reduce, minPoints} = this.options;
+        const { radius, extent, reduce, minPoints } = this.options;
         const r = radius / (extent * Math.pow(2, zoom));
 
         // loop through each point
@@ -307,8 +318,8 @@ export default class Supercluster {
 
                 p.parentId = id;
                 clusters.push(createCluster(wx / numPoints, wy / numPoints, id, numPoints, clusterProperties));
-
-            } else { // left points as unclustered
+            } else {
+                // left points as unclustered
                 clusters.push(p);
 
                 if (numPoints > 1) {
@@ -353,7 +364,7 @@ function createCluster(x, y, id, numPoints, properties) {
         id, // encodes index of the first child of the cluster and its zoom level
         parentId: -1, // parent cluster id
         numPoints,
-        properties
+        properties,
     };
 }
 
@@ -364,7 +375,7 @@ function createPointCluster(p, id) {
         y: fround(latY(y)),
         zoom: Infinity, // the last zoom the point was processed at
         index: id, // index of the source feature in the original input array,
-        parentId: -1 // parent cluster id
+        parentId: -1, // parent cluster id
     };
 }
 
@@ -375,39 +386,73 @@ function getClusterJSON(cluster) {
         properties: getClusterProperties(cluster),
         geometry: {
             type: 'Point',
-            coordinates: [xLng(cluster.x), yLat(cluster.y)]
-        }
+            coordinates: [xLng(cluster.x), yLat(cluster.y)],
+        },
     };
 }
 
 function getClusterProperties(cluster) {
     const count = cluster.numPoints;
     const abbrev =
-        count >= 10000 ? `${Math.round(count / 1000)  }k` :
-        count >= 1000 ? `${Math.round(count / 100) / 10  }k` : count;
+        count >= 10000 ? `${Math.round(count / 1000)}k` : count >= 1000 ? `${Math.round(count / 100) / 10}k` : count;
     return Object.assign({}, cluster.properties, {
         cluster: true,
         cluster_id: cluster.id,
         point_count: count,
-        point_count_abbreviated: abbrev
+        point_count_abbreviated: abbrev,
     });
 }
 
 // longitude/latitude to spherical mercator in [0..1] range
 function lngX(lng) {
-    return lng / 360 + 0.5;
+    let centerX;
+    switch (crs) {
+        case 'EPSG:4490':
+        case 'EPSG:4326':
+            centerX = (crsMap['EPSG:4326']['extent'][2] + crsMap['EPSG:4326']['extent'][0]) / 2;
+            return (lng - centerX) / crsMap['EPSG:4326'].width + 0.5;
+        default:
+            return lng / 360 + 0.5;
+    }
 }
-function latY(lat) {
-    const sin = Math.sin(lat * Math.PI / 180);
-    const y = (0.5 - 0.25 * Math.log((1 + sin) / (1 - sin)) / Math.PI);
+function latY(y) {
+    let centerY;
+    switch (crs) {
+        case 'EPSG:4490':
+        case 'EPSG:4326':
+            centerY = (crsMap['EPSG:4326']['extent'][3] + crsMap['EPSG:4326']['extent'][1]) / 2;
+            y = 0.5 - (y - centerY) / crsMap['EPSG:4326'].height;
+            break;
+        default:
+            y =
+                0.5 -
+                (0.25 * Math.log((1 + Math.sin((y * Math.PI) / 180)) / (1 - Math.sin((y * Math.PI) / 180)))) / Math.PI;
+            break;
+    }
     return y < 0 ? 0 : y > 1 ? 1 : y;
 }
 
 // spherical mercator to longitude/latitude
 function xLng(x) {
-    return (x - 0.5) * 360;
+    let centerX;
+    switch (crs) {
+        case 'EPSG:4490':
+        case 'EPSG:4326':
+            centerX = (crsMap['EPSG:4326']['extent'][2] + crsMap['EPSG:4326']['extent'][0]) / 2;
+            return (x - 0.5) * crsMap['EPSG:4326'].width + centerX;
+        default:
+            return (x - 0.5) * 360;
+    }
 }
 function yLat(y) {
-    const y2 = (180 - y * 360) * Math.PI / 180;
-    return 360 * Math.atan(Math.exp(y2)) / Math.PI - 90;
+    switch (crs) {
+        case 'EPSG:4490':
+        case 'EPSG:4326':
+            const height = crsMap['EPSG:4326']['extent'][3] - crsMap['EPSG:4326']['extent'][1];
+            const originY = crsMap['EPSG:4326']['extent'][3];
+            return originY - y * height;
+        default:
+            const y2 = ((180 - y * 360) * Math.PI) / 180;
+            return (360 * Math.atan(Math.exp(y2))) / Math.PI - 90;
+    }
 }
